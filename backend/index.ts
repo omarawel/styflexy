@@ -1,83 +1,92 @@
-import express from 'express';
-import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
 import stripe from 'stripe';
 import bcrypt from 'bcryptjs';
 
-const app = express();
 const prisma = new PrismaClient();
 const stripeClient = new stripe(process.env.STRIPE_SECRET_KEY!);
 
-app.use(cors());
-app.use(express.json());
+export default async function handler(req: any, res: any) {
+  // Middleware für JSON-Parsing
+  const body = req.body;
 
-// User Registration
-app.post('/api/register', async (req, res) => {
-  const { email, password, role } = req.body;
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: { email, password: hashedPassword, role: role || 'customer' },
-    });
-    if (role === 'salon') {
-      await prisma.salon.create({
-        data: { name: email, address: '', userId: user.id },
+  // CORS-Header
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // Route: /api/register
+  if (req.url === '/api/register' && req.method === 'POST') {
+    const { email, password, role } = body;
+    try {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const user = await prisma.user.create({
+        data: { email, password: hashedPassword, role: role || 'customer' },
       });
+      if (role === 'salon') {
+        await prisma.salon.create({
+          data: { name: email, address: '', userId: user.id },
+        });
+      }
+      return res.status(200).json({ user });
+    } catch (error) {
+      return res.status(400).json({ error: 'User already exists' });
     }
-    res.json({ user });
-  } catch (error) {
-    res.status(400).json({ error: 'User already exists' });
   }
-});
 
-// Create Checkout Session
-app.post('/api/create-checkout-session', async (req, res) => {
-  const { plan, userId } = req.body;
-  const priceIds = {
-    basic: 'price_basic_monthly',
-    premium: 'price_premium_monthly',
-    pro: 'price_pro_monthly',
-  };
+  // Route: /api/create-checkout-session
+  if (req.url === '/api/create-checkout-session' && req.method === 'POST') {
+    const { plan, userId } = body;
+    const priceIds = {
+      basic: 'price_basic_monthly',
+      premium: 'price_premium_monthly',
+      pro: 'price_pro_monthly',
+    };
 
-  try {
-    const session = await stripeClient.checkout.sessions.create({
-      mode: 'subscription',
-      payment_method_types: ['card'],
-      line_items: [{ price: priceIds[plan as keyof typeof priceIds], quantity: 1 }],
-      success_url: `${process.env.NEXT_PUBLIC_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${process.env.NEXT_PUBLIC_URL}/cancel`,
-      client_reference_id: userId.toString(),
-    });
-    res.json({ id: session.id });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create checkout session' });
+    try {
+      const session = await stripeClient.checkout.sessions.create({
+        mode: 'subscription',
+        payment_method_types: ['card'],
+        line_items: [{ price: priceIds[plan as keyof typeof priceIds], quantity: 1 }],
+        success_url: `${process.env.NEXT_PUBLIC_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.NEXT_PUBLIC_URL}/cancel`,
+        client_reference_id: userId?.toString(),
+      });
+      return res.status(200).json({ id: session.id });
+    } catch (error) {
+      return res.status(500).json({ error: 'Failed to create checkout session' });
+    }
   }
-});
 
-// Create Booking
-app.post('/api/bookings', async (req, res) => {
-  const { userId, salonId, service, date } = req.body;
-  try {
-    const booking = await prisma.booking.create({
-      data: { userId, salonId, service, date: new Date(date) },
-    });
-    res.json({ booking });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to create booking' });
+  // Route: /api/bookings
+  if (req.url === '/api/bookings' && req.method === 'POST') {
+    const { userId, salonId, service, date } = body;
+    try {
+      const booking = await prisma.booking.create({
+        data: { userId, salonId, service, date: new Date(date) },
+      });
+      return res.status(200).json({ booking });
+    } catch (error) {
+      return res.status(500).json({ error: 'Failed to create booking' });
+    }
   }
-});
 
-// Get Salon Bookings
-app.get('/api/salons/:id/bookings', async (req, res) => {
-  const { id } = req.params;
-  try {
-    const bookings = await prisma.booking.findMany({
-      where: { salonId: parseInt(id) },
-    });
-    res.json({ bookings });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch bookings' });
+  // Route: /api/salons/:id/bookings
+  if (req.url.startsWith('/api/salons/') && req.method === 'GET') {
+    const id = parseInt(req.url.split('/')[3]);
+    try {
+      const bookings = await prisma.booking.findMany({
+        where: { salonId: id },
+      });
+      return res.status(200).json({ bookings });
+    } catch (error) {
+      return res.status(500).json({ error: 'Failed to fetch bookings' });
+    }
   }
-});
 
-app.listen(4000, () => console.log('Backend running on port 4000'));
+  // Fallback: Route nicht gefunden
+  return res.status(404).json({ error: 'Route not found' });
+}
